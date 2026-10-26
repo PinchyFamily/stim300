@@ -53,6 +53,22 @@ public:
   uint8_t getInternalMeasurementCounter() const noexcept;
   Stim300Status update() noexcept;
 
+  // Settings applied to the sensor through Service Mode. 0 leaves a setting
+  // as the sensor has it.
+  struct SensorSettings {
+    uint16_t sample_rate_hz{0};  // 125, 250, 500, 1000 or 2000
+    uint16_t lp_filter_hz{0};    // LP filter -3dB frequency: 16, 33, 66, 131 or 262
+    bool save_to_flash{false};   // also store the settings in the sensor's flash
+  };
+
+  // Applies the settings through Service Mode (SERVICEMODE, m, f, [s], x N).
+  // Must be called before update(). Without save_to_flash the settings last
+  // until the sensor is powered off or reset, so they are re-applied on every
+  // start. Returns false and fills `log` with the sensor's responses if the
+  // sensor did not accept a setting. The sensor is always taken back to
+  // Normal Mode.
+  bool configureSensor(const SensorSettings &settings, std::string &log);
+
 private:
   enum class Mode : uint8_t { Init, WaitingForConfig, Normal, Service };
   Mode mode_{Mode::Init};

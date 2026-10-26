@@ -88,6 +88,23 @@ int main(int argc, char** argv)
   device_name = node -> declare_parameter("device_name", "/dev/ttyUSB0");
   sample_rate = node -> declare_parameter("sample_rate", 125);
   gravity = node -> declare_parameter("gravity", 9.80665);
+  // Sample rate to set on the sensor at start-up (125, 250, 500, 1000, 2000), 0 = leave as is.
+  const int configure_sample_rate = node -> declare_parameter("configure_sample_rate", 0);
+  // LP filter -3dB frequency to set on the sensor at start-up (16, 33, 66, 131, 262), 0 = leave as is.
+  const int configure_lp_filter = node -> declare_parameter("configure_lp_filter", 0);
+  // Store the settings in the sensor's flash. Off: they last until power-off.
+  const bool save_config_to_flash = node -> declare_parameter("save_config_to_flash", false);
+  const std::string frame_id = node -> declare_parameter("frame_id", std::string(sam_msgs::msg::Links::IMU_LINK));
+  const std::string imu_topic = node -> declare_parameter("imu_topic", std::string(sam_msgs::msg::Topics::STIM_IMU_TOPIC));
+  // Diagonal of the covariances [x, y, z]
+  const std::vector<double> gyro_covariance = node -> declare_parameter("angular_velocity_covariance",
+      std::vector<double>{0.0000027474, 0.0000027474, 0.000007312});
+  const std::vector<double> acc_covariance = node -> declare_parameter("linear_acceleration_covariance",
+      std::vector<double>{0.00041915, 0.00041915, 0.000018995});
+  if (gyro_covariance.size() != 3 || acc_covariance.size() != 3) {
+    RCLCPP_FATAL(node->get_logger(), "angular_velocity_covariance and linear_acceleration_covariance need 3 values");
+    return 1;
+  }
 
 
 
@@ -96,19 +113,17 @@ int main(int argc, char** argv)
 
   // These values have been estimated by having beluga in a pool for a couple of minutes, and then calculate the variance for each values
   sensor_msgs::msg::Imu stim300msg{};
-  stim300msg.angular_velocity_covariance[0] = 0.0000027474;
-  stim300msg.angular_velocity_covariance[4] = 0.0000027474;
-  stim300msg.angular_velocity_covariance[8] = 0.000007312;
-  stim300msg.linear_acceleration_covariance[0] = 0.00041915;
-  stim300msg.linear_acceleration_covariance[4] = 0.00041915;
-  stim300msg.linear_acceleration_covariance[8] = 0.000018995;
+  for (size_t i = 0; i < 3; ++i) {
+    stim300msg.angular_velocity_covariance[4 * i] = gyro_covariance[i];
+    stim300msg.linear_acceleration_covariance[4 * i] = acc_covariance[i];
+  }
   stim300msg.orientation.x = 0.00000024358;
   stim300msg.orientation.y = 0.00000024358;
   stim300msg.orientation.z = 0.00000024358;
-  stim300msg.header.frame_id = sam_msgs::msg::Links::IMU_LINK;
+  stim300msg.header.frame_id = frame_id;
 
   // ros::Publisher imuSensorPublisher = node.advertise<sensor_msgs::Imu>(imu_output, 1000);
-  auto imuSensorPublisher = node->create_publisher<sensor_msgs::msg::Imu>(sam_msgs::msg::Topics::STIM_IMU_TOPIC, 1000);
+  auto imuSensorPublisher = node->create_publisher<sensor_msgs::msg::Imu>(imu_topic, 1000);
   //ros::Publisher orientationPublisher = node.advertise<sensor_msgs::Imu>("imu/orientation", 1000);
   // ros::ServiceServer service = node.advertiseService("IMU_calibration",responseCalibrateIMU);
   auto service = node->create_service<std_srvs::srv::Trigger>(sam_msgs::msg::Topics::STIM_CALIBRATION_SRV, responseCalibrateIMU);
@@ -126,6 +141,20 @@ int main(int argc, char** argv)
   try {
     SerialUnix serial_driver(device_name, stim_const::BaudRate::BAUD_921600);
     DriverStim300 driver_stim300(serial_driver);
+
+    DriverStim300::SensorSettings settings;
+    settings.sample_rate_hz = configure_sample_rate;
+    settings.lp_filter_hz = configure_lp_filter;
+    settings.save_to_flash = save_config_to_flash;
+    if (settings.sample_rate_hz > 0 || settings.lp_filter_hz > 0) {
+      std::string sensor_log;
+      if (!driver_stim300.configureSensor(settings, sensor_log)) {
+        RCLCPP_ERROR(node->get_logger(), "Could not configure the STIM300: %s", sensor_log.c_str());
+        throw std::runtime_error{"STIM300 configuration failed"};
+      }
+      RCLCPP_INFO(node->get_logger(), "STIM300 configured: sample rate %d Hz, LP filter %d Hz (0 = unchanged)%s",
+                  configure_sample_rate, configure_lp_filter, save_config_to_flash ? ", saved to flash" : "");
+    }
 
     // ROS_INFO("STIM300 IMU driver initialized successfully");
     RCLCPP_INFO(node->get_logger(), "STIM300 IMU driver initialized successfully");

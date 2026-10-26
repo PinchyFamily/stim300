@@ -46,6 +46,17 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gmock REQUIRED)
+  ament_add_gmock(check_configure_sensor
+    test/check_configure_sensor.cpp
+    test/mock_serial_driver.h
+  )
+  if(TARGET check_configure_sensor)
+    target_link_libraries(check_configure_sensor driver_stim300)
+  endif()
+endif()
+
+if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(check_datasheet_constanst
     test/check_stim300_constants.cpp

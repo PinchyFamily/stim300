@@ -1,7 +1,8 @@
 <launch>
     <arg name="robot_name" default="sam" />
+    <arg name="device" default="/dev/serial/by-id/usb-FTDI_USB-RS422_Cable_FT1JNN7R-if00-port0" />
     <node pkg="stim300" exec="stim300_driver" name="stim300_driver" output="screen" namespace = "$(var robot_name)">
-        <param name = "device_name" value="/dev/ttyUSB0" />
+        <param name = "device_name" value="$(var device)" />
         <param name =  "stanard_deviation_of_gyro" value="0.0004" />
         <param name = "stanard_deviation_of_acc" value="0.004" />
         <param name = "sample_rate" value = "250" />

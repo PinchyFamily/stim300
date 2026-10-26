@@ -1,6 +1,8 @@
 
 #include "driver_stim300.h"
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 DriverStim300::DriverStim300(SerialDriver &serial_driver,
                              DatagramIdentifier datagram_id,
@@ -273,10 +275,154 @@ Stim300Status DriverStim300::update() noexcept {
 }
 
 
+namespace {
+// Reads ASCII service mode output until `idle` has passed without a new byte
+// (after at least one byte), or `total` has passed.
+std::string readResponse(SerialDriver &serial, std::chrono::milliseconds total,
+                         std::chrono::milliseconds idle) {
+  using Clock = std::chrono::steady_clock;
+  std::string response;
+  const auto start = Clock::now();
+  auto last_byte = start;
+  uint8_t byte;
+  while (Clock::now() - start < total) {
+    if (serial.readByte(byte)) {
+      response.push_back(static_cast<char>(byte));
+      last_byte = Clock::now();
+    } else {
+      if (!response.empty() && Clock::now() - last_byte > idle) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  return response;
+}
+
+void writeCommand(SerialDriver &serial, const std::string &command) {
+  for (char c : command) {
+    serial.writeByte(static_cast<uint8_t>(c));
+  }
+  serial.writeByte('\r');
+}
+} // namespace
+
+bool DriverStim300::configureSensor(const SensorSettings &settings,
+                                    std::string &log) {
+  using std::chrono::milliseconds;
+  int rate_index{-1};
+  switch (settings.sample_rate_hz) {
+  case 0:
+    break;
+  case 125:
+    rate_index = 0;
+    break;
+  case 250:
+    rate_index = 1;
+    break;
+  case 500:
+    rate_index = 2;
+    break;
+  case 1000:
+    rate_index = 3;
+    break;
+  case 2000:
+    rate_index = 4;
+    break;
+  default:
+    log = "Unsupported sample rate, use 125, 250, 500, 1000 or 2000 Hz";
+    return false;
+  }
+  int filter_index{-1};
+  switch (settings.lp_filter_hz) {
+  case 0:
+    break;
+  case 16:
+    filter_index = 0;
+    break;
+  case 33:
+    filter_index = 1;
+    break;
+  case 66:
+    filter_index = 2;
+    break;
+  case 131:
+    filter_index = 3;
+    break;
+  case 262:
+    filter_index = 4;
+    break;
+  default:
+    log = "Unsupported LP filter, use 16, 33, 66, 131 or 262 Hz";
+    return false;
+  }
+  if (rate_index < 0 && filter_index < 0) {
+    log = "Nothing to configure";
+    return true;
+  }
+
+  // The sensor completes the datagram in flight before it enters Service Mode,
+  // so the reply is preceded by binary measurement data.
+  serial_driver_.flush();
+  writeCommand(serial_driver_, "SERVICEMODE");
+  std::string response =
+      readResponse(serial_driver_, milliseconds(2000), milliseconds(300));
+  log = response;
+  if (response.find("SERIAL NUMBER") == std::string::npos) {
+    log = "Sensor did not enter Service Mode";
+    return false;
+  }
+
+  // Sends a command and checks that the reply contains `expected` and no error.
+  auto accepted = [&](const std::string &command, const std::string &expected) {
+    writeCommand(serial_driver_, command);
+    response =
+        readResponse(serial_driver_, milliseconds(1000), milliseconds(200));
+    log += response;
+    return response.find(expected) != std::string::npos &&
+           response.find("E00") == std::string::npos;
+  };
+
+  bool ok = true;
+  if (ok && rate_index >= 0) {
+    ok = accepted("m " + std::to_string(rate_index), "SAMPLE RATE");
+  }
+  if (ok && filter_index >= 0) {
+    ok = accepted("f " + std::to_string(filter_index), "LP FILTER");
+  }
+
+  if (ok && settings.save_to_flash) {
+    writeCommand(serial_driver_, "s");
+    response = readResponse(serial_driver_, milliseconds(1000), milliseconds(200));
+    log += response;
+    if (response.find("CONFIRM SAVE") != std::string::npos) {
+      writeCommand(serial_driver_, "Y");
+      response =
+          readResponse(serial_driver_, milliseconds(3000), milliseconds(300));
+      log += response;
+    }
+    ok = response.find("SUCCESSFULLY STORED") != std::string::npos;
+  }
+
+  // N returns to Normal Mode at once, without asking about unsaved changes.
+  writeCommand(serial_driver_, "x N");
+  response = readResponse(serial_driver_, milliseconds(1000), milliseconds(200));
+  log += response;
+
+  // Start over: drop the service mode text, then request the configuration.
+  serial_driver_.flush();
+  sync_buffer_.clear();
+  n_checked_bytes = 0;
+  read_config_from_sensor_ = true;
+  mode_ = Mode::Init;
+  return ok;
+}
+
 bool DriverStim300::setDatagramFormat(DatagramIdentifier id) {
   datagram_id_ = datagramIdentifierToRaw(id);
   datagram_size_ = calculateDatagramSize(id);
   crc_dummy_bytes_ = numberOfPaddingBytes(id);
+  return true;
 }
 
 bool DriverStim300::verifyChecksum(
