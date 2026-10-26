@@ -1,11 +1,16 @@
 <launch>
     <arg name="robot_name" default="sam" />
     <arg name="device" default="/dev/serial/by-id/usb-FTDI_USB-RS422_Cable_FT1JNN7R-if00-port0" />
+    <!-- Set on the sensor at start-up, 0 = leave as is. See the README for how to choose them. -->
+    <arg name="sample_rate" default="250" />
+    <arg name="lp_filter" default="66" />
+    <arg name="save_to_flash" default="false" />
     <node pkg="stim300" exec="stim300_driver" name="stim300_driver" output="screen" namespace = "$(var robot_name)">
         <param name = "device_name" value="$(var device)" />
-        <param name =  "stanard_deviation_of_gyro" value="0.0004" />
-        <param name = "stanard_deviation_of_acc" value="0.004" />
-        <param name = "sample_rate" value = "250" />
-
+        <param name = "configure_sample_rate" value = "$(var sample_rate)" />
+        <param name = "configure_lp_filter" value = "$(var lp_filter)" />
+        <param name = "save_config_to_flash" value = "$(var save_to_flash)" />
+        <!-- Loop rate until the driver has read the sensor's own configuration -->
+        <param name = "sample_rate" value = "$(var sample_rate)" />
     </node>
 </launch>
