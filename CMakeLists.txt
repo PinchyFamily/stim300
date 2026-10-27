@@ -13,6 +13,7 @@ add_library(driver_stim300
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(sam_msgs REQUIRED)
@@ -66,10 +67,23 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+ament_python_install_package(stim300_tools)
+install(PROGRAMS
+  scripts/imu_stats
+  scripts/static_noise
+  scripts/allan_variance
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
 )
 
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_stim300_tools test/test_stim300_tools.py)
+endif()
 
 ament_package()

@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Allan deviation of a recording made with the IMU sitting still: noise, bias instability, random walk."""
+import argparse
+import os
+
+from stim300_tools import analysis, recording
+
+# STIM300 datasheet TS1524, 10 g accelerometers, @25 C
+DATASHEET = {
+    'gyro': {'ARW [deg/sqrt(h)]': 0.15, 'bias instability [deg/h]': 0.3},
+    'acc': {'VRW [m/s/sqrt(h)]': 0.07, 'bias instability [mg]': 0.04},
+}
+
+
+def report(label, p, units, datasheet):
+    print(f'\n{label}')
+    for name, value in units.items():
+        shown = 'not visible' if value is None else f'{value:.4g}'
+        ref = f'  (datasheet {datasheet[name]})' if name in datasheet else ''
+        print(f'  {name}: {shown}{ref}')
+    tau = p.bias_instability_tau
+    note = '' if p.bias_instability_resolved else '  <- minimum not clearly reached, recording too short or drift dominates'
+    print(f'  minimum of the curve at tau = {tau:.3g} s{note}')
+
+
+def plot(path, results, rec):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for ax, (label, unit, scale, curves) in zip(axes, results):
+        for axis, (tau, adev, err) in zip(analysis.AXES, curves):
+            line, = ax.loglog(tau, adev * scale, label=axis)
+            ax.fill_between(tau, (adev - err) * scale, (adev + err) * scale,
+                            color=line.get_color(), alpha=0.2)
+        ax.set_title(label)
+        ax.set_xlabel('tau [s]')
+        ax.set_ylabel(unit)
+        ax.grid(True, which='both', alpha=0.3)
+        ax.legend()
+    fig.suptitle(f'{len(rec)} samples, {rec.duration / 3600:.2f} h at {1 / rec.dt:.1f} Hz')
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input', help='rosbag2 directory or .npz from imu_stats / static_noise --save')
+    parser.add_argument('--topic', default='/sam/core/imu')
+    parser.add_argument('--output', default='allan', help='prefix for the plot (<prefix>.png) and .npz cache')
+    args = parser.parse_args()
+
+    rec = recording.load(args.input, args.topic)
+    t = analysis.timing_stats(rec)
+    print(f'{t.samples} samples, {t.duration / 3600:.2f} h, {t.rate:.2f} Hz, '
+          f'{t.gaps} gaps longer than 1.5 periods, {t.non_monotonic} non-increasing stamps')
+    if t.gaps:
+        print('Gaps are treated as if the samples were evenly spaced, which is fine for a few.')
+    if t.duration < 3600:
+        print('Under an hour: the noise terms are fine, the bias instability will not be resolved.')
+    if not args.input.endswith('.npz'):
+        rec.save(args.output + '.npz')
+        print(f'Samples cached in {args.output}.npz, pass that file to skip reading the bag next time.')
+
+    dt = rec.dt
+    plots = []
+    for label, data, unit_scale, unit, units_fn, key in (
+            ('Gyro', rec.gyro, analysis.RAD2DEG * 3600.0, 'Allan deviation [deg/h]', analysis.gyro_report_units, 'gyro'),
+            ('Accelerometer', rec.acc, 1e3 / analysis.GRAVITY, 'Allan deviation [mg]', analysis.acc_report_units, 'acc')):
+        curves = []
+        for i, axis in enumerate(analysis.AXES):
+            tau, adev, err = analysis.allan_deviation(data[:, i], dt)
+            curves.append((tau, adev, err))
+            p = analysis.noise_parameters(tau, adev, dt)
+            report(f'{label} {axis}', p, units_fn(p), DATASHEET[key])
+        plots.append((label, unit, unit_scale, curves))
+
+    png = args.output + '.png'
+    plot(png, plots, rec)
+    print(f'\nPlot written to {os.path.abspath(png)}')
+
+
+if __name__ == '__main__':
+    main()

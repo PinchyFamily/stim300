@@ -67,8 +67,30 @@ Not configurable through the node: the serial speed (fixed at 921600 baud, the s
 - With `save_config_to_flash: false` the settings are applied through the sensor's Service Mode every time the driver starts, and last until the sensor is powered off or reset. The sensor's stored settings are not changed.
 - With `true` they are also written to the sensor's flash and survive a power cycle. The flash is rated for at least 10,000 saves, so do not leave this on in a launch file that runs often.
 
+## Characterisation tools
+Python tools for checking a unit, installed with the package (`ros2 run stim300 <name> --help`). They read `sensor_msgs/Imu`, so they work with any IMU driver, and need the driver running (or a recording). The topic defaults to `/sam/core/imu`.
+
+| Tool | Use |
+|---|---|
+| `imu_stats` | Rate, gaps and per-axis mean and standard deviation over `--duration` seconds. A quick check after changing settings |
+| `static_noise` | Record the sensor sitting still (default 300 s) and print the gyro bias, accelerometer mean, drift, and `angular_velocity_covariance` / `linear_acceleration_covariance` ready to paste into `imu.yaml` |
+| `allan_variance` | Allan deviation of a still recording: angle / velocity random walk, bias instability and rate random walk per axis, next to the datasheet values, plus a plot `<output>.png` |
+
+```
+ros2 bag record -o still_250hz /sam/core/imu       # leave the sensor undisturbed, 2 h or more
+ros2 run stim300 allan_variance still_250hz --output allan_250hz
+```
+`allan_variance` also reads the `.npz` written by `--save` (or the one it caches itself), which is much faster than reading a bag again.
+
+Notes:
+- The sensor must be still and thermally settled: put it on something rigid and heavy, away from vibration and draughts, and let it warm up for 20-30 minutes first. Any motion counts as noise.
+- Everything depends on the sample rate and LP filter that were set while recording. The random-walk noise is only valid down to the filter's correlation time (the tools skip the first 10 samples), and covariances change with the filter. Record again after changing either.
+- The bias instability needs a recording of at least an hour, and a few hours to be reliable. The tool says when the minimum of the curve was not reached. Random walk (ARW, VRW) is good after a minute or two.
+- The datasheet values it prints are for the 10 g accelerometers at 25 C.
+- Tests: `colcon test --packages-select stim300` runs the analysis against synthetic data with known noise parameters.
+
 ## Dependencies
-Builds on ROS 2 Jazzy. Needs `sam_msgs` (and its `smarc_msgs`) from [smarc2](https://github.com/smarc-project/smarc2) `messages/`, which supply the default topic, frame and calibration service names. Tests: `colcon test --packages-select stim300`. `check_driver_stim300` has two known failures on this branch and on upstream.
+Builds on ROS 2 Jazzy. Needs `sam_msgs` (and its `smarc_msgs`) from [smarc2](https://github.com/smarc-project/smarc2) `messages/`, which supply the default topic, frame and calibration service names. Python tools need numpy and matplotlib (apt `python3-numpy`, `python3-matplotlib`) and `rosbag2_py`. Tests: `colcon test --packages-select stim300`. `check_driver_stim300` has two known failures on this branch and on upstream.
 
 ## Serial port access
 The user needs to be in the `dialout` group to open the device: `sudo usermod -aG dialout $USER`, then log in again.

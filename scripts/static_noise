@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Bias and covariance of an IMU that is sitting still, as `imu.yaml` parameters."""
+import argparse
+
+import numpy as np
+
+from stim300_tools import analysis, recording
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--topic', default='/sam/core/imu')
+    parser.add_argument('--duration', type=float, default=300.0, help='seconds to record')
+    parser.add_argument('--input', metavar='FILE_OR_BAG',
+                        help='analyse a .npz or rosbag2 instead of recording')
+    parser.add_argument('--save', metavar='FILE.npz', help='also keep the samples')
+    args = parser.parse_args()
+
+    if args.input:
+        rec = recording.load(args.input, args.topic)
+    else:
+        print(f'Keep the sensor still for {args.duration:.0f} s.')
+        rec = recording.record_topic(
+            args.topic, args.duration,
+            progress=lambda elapsed, n: print(f'\r{elapsed:5.0f} s  {n} samples', end='', flush=True))
+        print()
+    if args.save:
+        rec.save(args.save)
+
+    t = analysis.timing_stats(rec)
+    s = analysis.static_summary(rec)
+    print(f'\n{t.samples} samples over {t.duration:.0f} s at {t.rate:.1f} Hz '
+          f'({t.gaps} gaps, {t.non_monotonic} non-increasing stamps)')
+
+    print('\nGyro, rad/s (bias = mean while still)')
+    for i, axis in enumerate(analysis.AXES):
+        print(f'  {axis}: bias {s.gyro_mean[i]:+.6f} ({s.gyro_mean[i] * analysis.RAD2DEG:+.4f} deg/s)'
+              f'  std {np.sqrt(s.gyro_var[i]):.6f}'
+              f'  drift first->last third {s.gyro_drift[i]:+.2e}')
+    print('\nAccelerometer, m/s^2')
+    for i, axis in enumerate(analysis.AXES):
+        print(f'  {axis}: mean {s.acc_mean[i]:+.5f}  std {np.sqrt(s.acc_var[i]):.5f}'
+              f'  drift first->last third {s.acc_drift[i]:+.2e}')
+    print(f'  |mean| = {s.acc_magnitude:.4f} m/s^2, '
+          f'{100 * (s.acc_magnitude / analysis.GRAVITY - 1):+.2f}% from standard gravity')
+
+    if np.any(np.abs(s.gyro_mean) > 0.5 / analysis.RAD2DEG):
+        print('\nWARNING: a gyro mean above 0.5 deg/s means the sensor was moving (or is badly biased).')
+    if abs(s.acc_magnitude / analysis.GRAVITY - 1) > 0.05:
+        print('\nWARNING: the acceleration magnitude is more than 5% from g, so the sensor was not still.')
+
+    print('\nParameters for imu.yaml. The values depend on the sample rate and LP filter')
+    print('that were set when recording, so redo them when those change.')
+    print(f'    angular_velocity_covariance: [{", ".join(f"{v:.4e}" for v in s.gyro_var)}]')
+    print(f'    linear_acceleration_covariance: [{", ".join(f"{v:.4e}" for v in s.acc_var)}]')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Publishing rate, gaps and per-axis mean and spread of an IMU topic."""
+import argparse
+
+import numpy as np
+
+from stim300_tools import analysis, recording
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--topic', default='/sam/core/imu')
+    parser.add_argument('--duration', type=float, default=10.0, help='seconds to record')
+    parser.add_argument('--save', metavar='FILE.npz', help='also keep the samples')
+    args = parser.parse_args()
+
+    rec = recording.record_topic(args.topic, args.duration)
+    t = analysis.timing_stats(rec)
+    print(f'{t.samples} samples over {t.duration:.1f} s -> {t.rate:.2f} Hz')
+    print(f'stamp intervals: max {t.stamp_dt_max * 1e3:.1f} ms, '
+          f'{t.gaps} longer than 1.5 periods, {t.non_monotonic} not increasing')
+    if t.arrival_dt_max is not None:
+        print(f'arrival intervals: max {t.arrival_dt_max * 1e3:.1f} ms, '
+              f'{t.arrival_gaps} longer than 1.5 periods')
+    for name, data, unit in (('gyro', rec.gyro, 'rad/s'), ('acc', rec.acc, 'm/s^2')):
+        for i, axis in enumerate(analysis.AXES):
+            print(f'{name} {axis}: mean {data[:, i].mean():+.5f}  std {data[:, i].std(ddof=1):.5f} {unit}')
+    magnitude = np.linalg.norm(rec.acc, axis=1)
+    print(f'|acc|: mean {magnitude.mean():.4f} m/s^2 (g = {analysis.GRAVITY})  '
+          f'std {magnitude.std(ddof=1):.5f}')
+    if args.save:
+        rec.save(args.save)
+        print(f'saved to {args.save}')
+
+
+if __name__ == '__main__':
+    main()
